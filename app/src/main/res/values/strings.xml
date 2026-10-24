@@ -1,0 +1,5 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Anime Control Center</string>
+    <string name="acc_desc">Opens your custom Anime Quick Settings Control Center when swiping down from the top-right edge.</string>
+</resources>

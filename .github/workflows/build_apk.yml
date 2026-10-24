@@ -1,0 +1,923 @@
+name: Build Clean Anime APK
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Generate Clean Android Project & Compile APK
+        run: |
+          rm -rf build_workspace
+          mkdir -p build_workspace/app/src/main/java/com/anuvab/animecontrol
+          mkdir -p build_workspace/app/src/main/res/values
+          mkdir -p build_workspace/app/src/main/res/xml
+          cd build_workspace
+
+          cat << 'EOF' > settings.gradle
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "AnimeControlCenter"
+          include ':app'
+          EOF
+
+          cat << 'EOF' > build.gradle
+          plugins {
+              id 'com.android.application' version '8.4.2' apply false
+              id 'org.jetbrains.kotlin.android' version '1.9.24' apply false
+          }
+          EOF
+
+          cat << 'EOF' > gradle.properties
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          EOF
+
+          cat << 'EOF' > app/build.gradle
+          plugins {
+              id 'com.android.application'
+              id 'org.jetbrains.kotlin.android'
+          }
+
+          android {
+              namespace 'com.anuvab.animecontrol'
+              compileSdk 34
+
+              defaultConfig {
+                  applicationId "com.anuvab.animecontrol"
+                  minSdk 26
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0"
+              }
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+              kotlinOptions {
+                  jvmTarget = '17'
+              }
+          }
+          EOF
+
+          cat << 'EOF' > app/src/main/AndroidManifest.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              xmlns:tools="http://schemas.android.com/tools">
+
+              <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+              <uses-permission android:name="android.permission.WRITE_SETTINGS" tools:ignore="ProtectedPermissions" />
+              <uses-permission android:name="android.permission.CAMERA" />
+
+              <application
+                  android:allowBackup="true"
+                  android:label="@string/app_name"
+                  android:icon="@android:drawable/sym_def_app_icon"
+                  android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+
+                  <service
+                      android:name=".AnimeControlService"
+                      android:exported="true"
+                      android:label="@string/app_name"
+                      android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+                      <intent-filter>
+                          <action android:name="android.accessibilityservice.AccessibilityService" />
+                      </intent-filter>
+                      <meta-data
+                          android:name="android.accessibilityservice"
+                          android:resource="@xml/accessibility_service_config" />
+                  </service>
+              </application>
+          </manifest>
+          EOF
+
+          cat << 'EOF' > app/src/main/res/values/strings.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <string name="app_name">Anime Control Center</string>
+              <string name="acc_desc">Opens your custom Anime Quick Settings Control Center when swiping down from the top-right edge.</string>
+          </resources>
+          EOF
+
+          cat << 'EOF' > app/src/main/res/xml/accessibility_service_config.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+              android:description="@string/acc_desc"
+              android:accessibilityEventTypes="typeAllMask"
+              android:accessibilityFlags="flagDefault"
+              android:accessibilityFeedbackType="feedbackGeneric"
+              android:notificationTimeout="100"
+              android:canRetrieveWindowContent="true"
+              android:canTakeScreenshot="true" />
+          EOF
+
+          cat << 'EOF' > app/src/main/java/com/anuvab/animecontrol/MainActivity.kt
+          package com.anuvab.animecontrol
+
+          import android.app.Activity
+          import android.content.Context
+          import android.content.Intent
+          import android.graphics.Color
+          import android.graphics.Typeface
+          import android.graphics.drawable.GradientDrawable
+          import android.net.Uri
+          import android.os.Bundle
+          import android.provider.Settings
+          import android.view.Gravity
+          import android.view.View
+          import android.widget.*
+          import java.io.File
+          import java.io.FileOutputStream
+
+          class MainActivity : Activity() {
+
+              private val REQ_BG_IMAGE = 101
+              private val REQ_CHIBI_IMAGE = 102
+              private lateinit var statusText: TextView
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+
+                  val prefs = getSharedPreferences("anime_prefs", Context.MODE_PRIVATE)
+
+                  val rootScroll = ScrollView(this).apply {
+                      setBackgroundColor(Color.parseColor("#0D0F18"))
+                  }
+
+                  val container = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      val pad = dp(20)
+                      setPadding(pad, dp(36), pad, pad)
+                  }
+
+                  val title = TextView(this).apply {
+                      text = "ANIME CONTROL STUDIO"
+                      textSize = 24f
+                      setTypeface(null, Typeface.BOLD)
+                      setTextColor(Color.WHITE)
+                  }
+                  val subtitle = TextView(this).apply {
+                      text = "Customize your pull-down Quick Settings with Anime art & neon controls"
+                      textSize = 13f
+                      setTextColor(Color.parseColor("#94A3B8"))
+                      setPadding(0, dp(4), 0, dp(20))
+                  }
+                  container.addView(title)
+                  container.addView(subtitle)
+
+                  statusText = TextView(this).apply {
+                      textSize = 14f
+                      setTextColor(Color.WHITE)
+                      setPadding(dp(16), dp(16), dp(16), dp(16))
+                      background = roundBg(Color.parseColor("#1A1F35"), dp(16))
+                  }
+                  container.addView(statusText)
+                  addSpace(container, 16)
+
+                  container.addView(sectionHeader("1. Activate Control Center"))
+
+                  container.addView(actionButton("Grant Brightness & Settings Permission", "#2563EB") {
+                      val intent = Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS).apply {
+                          data = Uri.parse("package:$packageName")
+                      }
+                      startActivity(intent)
+                  })
+                  addSpace(container, 10)
+
+                  container.addView(actionButton("Enable 'Anime Control Center' in Accessibility", "#E11D48") {
+                      Toast.makeText(this, "Find 'Anime Control Center' and turn it ON", Toast.LENGTH_LONG).show()
+                      startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                  })
+                  addSpace(container, 10)
+
+                  container.addView(actionButton("Preview / Open Anime Panel Now", "#10B981") {
+                      val svc = AnimeControlService.instance
+                      if (svc != null) {
+                          svc.showControlPanel()
+                      } else {
+                          Toast.makeText(this, "Please enable Accessibility Service first!", Toast.LENGTH_SHORT).show()
+                      }
+                  })
+                  addSpace(container, 24)
+
+                  container.addView(sectionHeader("2. Anime Wallpaper & Character Sticker"))
+
+                  container.addView(actionButton("Pick Full Anime Background Image (Gallery)", "#7C3AED") {
+                      val intent = Intent(Intent.ACTION_GET_CONTENT).apply { type = "image/*" }
+                      startActivityForResult(Intent.createChooser(intent, "Select Anime Wallpaper"), REQ_BG_IMAGE)
+                  })
+                  addSpace(container, 10)
+
+                  container.addView(actionButton("Pick Bottom Anime Character / Chibi PNG", "#DB2777") {
+                      val intent = Intent(Intent.ACTION_GET_CONTENT).apply { type = "image/*" }
+                      startActivityForResult(Intent.createChooser(intent, "Select Character Image"), REQ_CHIBI_IMAGE)
+                  })
+                  addSpace(container, 10)
+
+                  container.addView(actionButton("Reset to Built-In Cyberpunk Anime Theme", "#334155") {
+                      File(filesDir, "anime_bg.jpg").delete()
+                      File(filesDir, "anime_chibi.png").delete()
+                      Toast.makeText(this, "Reset to default theme!", Toast.LENGTH_SHORT).show()
+                  })
+                  addSpace(container, 24)
+
+                  container.addView(sectionHeader("3. Active Toggle & Slider Color"))
+
+                  val colorRow = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      gravity = Gravity.CENTER
+                  }
+                  val colors = listOf(
+                      "Blue" to "#1E6FF9",
+                      "Pink" to "#FF2A85",
+                      "Purple" to "#9D4EDD",
+                      "Cyan" to "#00B4D8",
+                      "Red" to "#EF233C"
+                  )
+                  for ((name, hex) in colors) {
+                      val swatch = Button(this).apply {
+                          text = name
+                          textSize = 11f
+                          setTextColor(Color.WHITE)
+                          background = roundBg(Color.parseColor(hex), dp(12))
+                          val lp = LinearLayout.LayoutParams(0, dp(48), 1f)
+                          lp.setMargins(dp(4), 0, dp(4), 0)
+                          layoutParams = lp
+                          setOnClickListener {
+                              prefs.edit().putString("accent_hex", hex).apply()
+                              Toast.makeText(this@MainActivity, "Color set to $name!", Toast.LENGTH_SHORT).show()
+                          }
+                      }
+                      colorRow.addView(swatch)
+                  }
+                  container.addView(colorRow)
+                  addSpace(container, 24)
+
+                  val currentDim = prefs.getInt("bg_dim", 130)
+                  val dimLabel = sectionHeader("4. Wallpaper Darkness Overlay: ${(currentDim * 100) / 255}%")
+                  container.addView(dimLabel)
+
+                  val dimSeek = SeekBar(this).apply {
+                      max = 220
+                      progress = currentDim
+                      setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                          override fun onProgressChanged(s: SeekBar?, p: Int, f: Boolean) {
+                              dimLabel.text = "4. Wallpaper Darkness Overlay: ${(p * 100) / 255}%"
+                              prefs.edit().putInt("bg_dim", p).apply()
+                          }
+                          override fun onStartTrackingTouch(s: SeekBar?) {}
+                          override fun onStopTrackingTouch(s: SeekBar?) {}
+                      })
+                  }
+                  container.addView(dimSeek)
+                  addSpace(container, 40)
+
+                  rootScroll.addView(container)
+                  setContentView(rootScroll)
+              }
+
+              override fun onResume() {
+                  super.onResume()
+                  val canWrite = Settings.System.canWrite(this)
+                  val svcRunning = AnimeControlService.instance != null
+                  statusText.text = "Service Status:\n" +
+                      "• Brightness Control Permission: ${if (canWrite) "READY" else "NEEDS PERMISSION"}\n" +
+                      "• Top-Right Swipe Overlay Service: ${if (svcRunning) "ACTIVE (Swipe down from top-right!)" else "INACTIVE (Tap button 2 below)"}"
+              }
+
+              override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+                  super.onActivityResult(requestCode, resultCode, data)
+                  if (resultCode == RESULT_OK && data?.data != null) {
+                      val uri = data.data!!
+                      val targetFile = if (requestCode == REQ_BG_IMAGE) {
+                          File(filesDir, "anime_bg.jpg")
+                      } else {
+                          File(filesDir, "anime_chibi.png")
+                      }
+                      try {
+                          contentResolver.openInputStream(uri)?.use { input ->
+                              FileOutputStream(targetFile).use { output ->
+                                  input.copyTo(output)
+                              }
+                          }
+                          Toast.makeText(this, "Anime image saved! Swipe down from top-right to see it.", Toast.LENGTH_LONG).show()
+                      } catch (e: Exception) {
+                          Toast.makeText(this, "Failed to load image: ${e.message}", Toast.LENGTH_SHORT).show()
+                      }
+                  }
+              }
+
+              private fun sectionHeader(title: String) = TextView(this).apply {
+                  text = title
+                  textSize = 15f
+                  setTypeface(null, Typeface.BOLD)
+                  setTextColor(Color.parseColor("#E2E8F0"))
+                  setPadding(0, 0, 0, dp(10))
+              }
+
+              private fun actionButton(label: String, colorHex: String, onClick: () -> Unit) = Button(this).apply {
+                  text = label
+                  textSize = 14f
+                  isAllCaps = false
+                  setTextColor(Color.WHITE)
+                  background = roundBg(Color.parseColor(colorHex), dp(14))
+                  setPadding(dp(16), dp(14), dp(16), dp(14))
+                  setOnClickListener { onClick() }
+              }
+
+              private fun roundBg(color: Int, radiusPx: Int) = GradientDrawable().apply {
+                  setColor(color)
+                  cornerRadius = radiusPx.toFloat()
+              }
+
+              private fun addSpace(parent: LinearLayout, heightDp: Int) {
+                  parent.addView(View(this), LinearLayout.LayoutParams(1, dp(heightDp)))
+              }
+
+              private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+          }
+          EOF
+
+          cat << 'EOF' > app/src/main/java/com/anuvab/animecontrol/AnimeControlService.kt
+          package com.anuvab.animecontrol
+
+          import android.accessibilityservice.AccessibilityService
+          import android.content.Context
+          import android.content.Intent
+          import android.graphics.*
+          import android.graphics.drawable.GradientDrawable
+          import android.hardware.camera2.CameraManager
+          import android.media.AudioManager
+          import android.os.BatteryManager
+          import android.os.Build
+          import android.os.Handler
+          import android.os.Looper
+          import android.provider.Settings
+          import android.view.*
+          import android.view.accessibility.AccessibilityEvent
+          import android.widget.*
+          import java.io.File
+          import java.text.SimpleDateFormat
+          import java.util.*
+
+          class AnimeControlService : AccessibilityService() {
+
+              companion object {
+                  var instance: AnimeControlService? = null
+              }
+
+              private class TileSpec(
+                  val icon: String,
+                  val label: String,
+                  val active: Boolean,
+                  val onTap: (TextView) -> Unit
+              )
+
+              private lateinit var wm: WindowManager
+              private var triggerView: View? = null
+              private var panelView: View? = null
+              private var eyeComfortView: View? = null
+
+              private var isTorchOn = false
+              private var isEyeComfortOn = false
+
+              override fun onServiceConnected() {
+                  super.onServiceConnected()
+                  instance = this
+                  wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+                  setupTopRightSwipeTrigger()
+              }
+
+              override fun onDestroy() {
+                  super.onDestroy()
+                  instance = null
+                  removeTrigger()
+                  hideControlPanel()
+              }
+
+              private fun setupTopRightSwipeTrigger() {
+                  removeTrigger()
+                  val screenW = resources.displayMetrics.widthPixels
+                  val triggerW = (screenW * 0.42f).toInt()
+
+                  triggerView = View(this).apply {
+                      setBackgroundColor(Color.TRANSPARENT)
+                      var downY = 0f
+                      setOnTouchListener { _, ev ->
+                          when (ev.action) {
+                              MotionEvent.ACTION_DOWN -> {
+                                  downY = ev.rawY
+                                  true
+                              }
+                              MotionEvent.ACTION_MOVE -> {
+                                  if (ev.rawY - downY > dp(24)) {
+                                      showControlPanel()
+                                  }
+                                  true
+                              }
+                              else -> false
+                          }
+                      }
+                  }
+
+                  val params = WindowManager.LayoutParams(
+                      triggerW,
+                      dp(28),
+                      WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                      WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                              WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                              WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                      PixelFormat.TRANSLUCENT
+                  ).apply {
+                      gravity = Gravity.TOP or Gravity.END
+                  }
+
+                  try {
+                      wm.addView(triggerView, params)
+                  } catch (_: Exception) {}
+              }
+
+              private fun removeTrigger() {
+                  triggerView?.let {
+                      try { wm.removeView(it) } catch (_: Exception) {}
+                      triggerView = null
+                  }
+              }
+
+              fun showControlPanel() {
+                  if (panelView != null) return
+
+                  val prefs = getSharedPreferences("anime_prefs", Context.MODE_PRIVATE)
+                  val accentColor = Color.parseColor(prefs.getString("accent_hex", "#1E6FF9") ?: "#1E6FF9")
+                  val bgDim = prefs.getInt("bg_dim", 130)
+
+                  val root = FrameLayout(this)
+
+                  val bgImage = ImageView(this).apply {
+                      scaleType = ImageView.ScaleType.CENTER_CROP
+                      val bgFile = File(filesDir, "anime_bg.jpg")
+                      if (bgFile.exists()) {
+                          setImageBitmap(BitmapFactory.decodeFile(bgFile.absolutePath))
+                      } else {
+                          background = GradientDrawable(
+                              GradientDrawable.Orientation.TL_BR,
+                              intArrayOf(Color.parseColor("#140B29"), Color.parseColor("#091931"), Color.parseColor("#1F0A24"))
+                          )
+                      }
+                  }
+                  root.addView(bgImage, FrameLayout.LayoutParams(-1, -1))
+
+                  val scrim = View(this).apply {
+                      setBackgroundColor(Color.argb(bgDim, 8, 10, 18))
+                  }
+                  root.addView(scrim, FrameLayout.LayoutParams(-1, -1))
+
+                  val chibiFile = File(filesDir, "anime_chibi.png")
+                  if (chibiFile.exists()) {
+                      val chibiView = ImageView(this).apply {
+                          scaleType = ImageView.ScaleType.FIT_END
+                          alpha = 0.92f
+                          setImageBitmap(BitmapFactory.decodeFile(chibiFile.absolutePath))
+                      }
+                      val chibiParams = FrameLayout.LayoutParams(dp(220), dp(240), Gravity.BOTTOM or Gravity.END).apply {
+                          setMargins(0, 0, dp(8), dp(20))
+                      }
+                      root.addView(chibiView, chibiParams)
+                  }
+
+                  val mainColumn = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      setPadding(dp(20), dp(42), dp(20), dp(24))
+                  }
+
+                  val headerRow = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      gravity = Gravity.CENTER_VERTICAL
+                  }
+
+                  val clockCol = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
+                  }
+                  val now = Date()
+                  val timeText = TextView(this).apply {
+                      text = SimpleDateFormat("h:mm", Locale.getDefault()).format(now)
+                      textSize = 36f
+                      setTypeface(null, Typeface.NORMAL)
+                      setTextColor(Color.WHITE)
+                  }
+                  val dateText = TextView(this).apply {
+                      text = SimpleDateFormat("EEE, d MMM", Locale.getDefault()).format(now)
+                      textSize = 14f
+                      setTextColor(Color.parseColor("#E2E8F0"))
+                  }
+                  clockCol.addView(timeText)
+                  clockCol.addView(dateText)
+
+                  val bm = getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+                  val batPct = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+
+                  val rightActions = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      gravity = Gravity.CENTER_VERTICAL
+                  }
+                  val batLabel = TextView(this).apply {
+                      text = "$batPct%"
+                      textSize = 14f
+                      setTypeface(null, Typeface.BOLD)
+                      setTextColor(Color.WHITE)
+                      setPadding(0, 0, dp(14), 0)
+                  }
+                  val settingsBtn = TextView(this).apply {
+                      text = "\u2699"
+                      textSize = 22f
+                      setTextColor(Color.WHITE)
+                      setPadding(dp(10), dp(6), dp(10), dp(6))
+                      setOnClickListener {
+                          hideControlPanel()
+                          openIntent(Intent(Settings.ACTION_SETTINGS))
+                      }
+                  }
+                  val closeBtn = TextView(this).apply {
+                      text = "\u2715"
+                      textSize = 20f
+                      setTextColor(Color.WHITE)
+                      setPadding(dp(12), dp(6), dp(4), dp(6))
+                      setOnClickListener { hideControlPanel() }
+                  }
+                  rightActions.addView(batLabel)
+                  rightActions.addView(settingsBtn)
+                  rightActions.addView(closeBtn)
+
+                  headerRow.addView(clockCol)
+                  headerRow.addView(rightActions)
+                  mainColumn.addView(headerRow)
+                  addSpacer(mainColumn, 20)
+
+                  val topSection = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                  }
+
+                  val pillCol = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      layoutParams = LinearLayout.LayoutParams(0, dp(164), 1.05f)
+                  }
+
+                  val simPill = createBigPill("\u21C5   SIM & Data", accentColor) {
+                      hideControlPanel()
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                          openIntent(Intent(Settings.Panel.ACTION_INTERNET_CONNECTIVITY))
+                      } else {
+                          openIntent(Intent(Settings.ACTION_DATA_ROAMING_SETTINGS))
+                      }
+                  }
+                  val wifiPill = createBigPill("\uD83D\uDCF6   Wi-Fi Network", accentColor) {
+                      hideControlPanel()
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                          openIntent(Intent(Settings.Panel.ACTION_WIFI))
+                      } else {
+                          openIntent(Intent(Settings.ACTION_WIFI_SETTINGS))
+                      }
+                  }
+                  pillCol.addView(simPill, LinearLayout.LayoutParams(-1, 0, 1f).apply { bottomMargin = dp(12) })
+                  pillCol.addView(wifiPill, LinearLayout.LayoutParams(-1, 0, 1f))
+
+                  val slidersRow = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      layoutParams = LinearLayout.LayoutParams(0, dp(164), 1f).apply { leftMargin = dp(14) }
+                  }
+
+                  val curBright = try {
+                      (Settings.System.getInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS) * 100) / 255
+                  } catch (_: Exception) { 60 }
+
+                  val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                  val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+                  val curVol = (audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) * 100) / maxVol
+
+                  val brightSlider = createVerticalSlider("\u2600", curBright, accentColor) { pct ->
+                      if (Settings.System.canWrite(this)) {
+                          val bVal = ((pct * 255) / 100).coerceIn(1, 255)
+                          Settings.System.putInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS_MODE, Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL)
+                          Settings.System.putInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, bVal)
+                      }
+                  }
+                  val volSlider = createVerticalSlider("\uD83D\uDD0A", curVol, accentColor) { pct ->
+                      val vVal = ((pct * maxVol) / 100).coerceIn(0, maxVol)
+                      audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, vVal, 0)
+                  }
+
+                  slidersRow.addView(brightSlider, LinearLayout.LayoutParams(0, -1, 1f).apply { rightMargin = dp(12) })
+                  slidersRow.addView(volSlider, LinearLayout.LayoutParams(0, -1, 1f))
+
+                  topSection.addView(pillCol)
+                  topSection.addView(slidersRow)
+                  mainColumn.addView(topSection)
+                  addSpacer(mainColumn, 24)
+
+                  val isRingActive = audioManager.ringerMode != AudioManager.RINGER_MODE_SILENT
+                  val isAutoRotate = try {
+                      Settings.System.getInt(contentResolver, Settings.System.ACCELEROMETER_ROTATION) == 1
+                  } catch (_: Exception) { false }
+
+                  val tiles = listOf(
+                      TileSpec("B", "Bluetooth", false) {
+                          hideControlPanel()
+                          openIntent(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
+                      },
+                      TileSpec("\uD83D\uDD14", "Ring", isRingActive) { btn ->
+                          val nextMode = if (audioManager.ringerMode == AudioManager.RINGER_MODE_NORMAL) {
+                              AudioManager.RINGER_MODE_VIBRATE
+                          } else {
+                              AudioManager.RINGER_MODE_NORMAL
+                          }
+                          try {
+                              audioManager.ringerMode = nextMode
+                              val normal = nextMode == AudioManager.RINGER_MODE_NORMAL
+                              styleCircleTile(btn, normal, accentColor)
+                          } catch (_: Exception) {}
+                      },
+                      TileSpec("\uD83D\uDD26", "Torch", isTorchOn) { btn ->
+                          toggleFlashlight()
+                          styleCircleTile(btn, isTorchOn, accentColor)
+                      },
+                      TileSpec("\uD83D\uDCCD", "Location", true) {
+                          hideControlPanel()
+                          openIntent(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+                      },
+                      TileSpec("\u2708", "Aeroplane mode", false) {
+                          hideControlPanel()
+                          openIntent(Intent(Settings.ACTION_AIRPLANE_MODE_SETTINGS))
+                      },
+                      TileSpec("\uD83C\uDFE0", "Device controls", false) {
+                          hideControlPanel()
+                          openIntent(Intent(this, MainActivity::class.java))
+                      },
+                      TileSpec("\uD83D\uDD04", "Auto-rotate", isAutoRotate) { btn ->
+                          if (Settings.System.canWrite(this)) {
+                              val cur = Settings.System.getInt(contentResolver, Settings.System.ACCELEROMETER_ROTATION, 0)
+                              val next = if (cur == 1) 0 else 1
+                              Settings.System.putInt(contentResolver, Settings.System.ACCELEROMETER_ROTATION, next)
+                              styleCircleTile(btn, next == 1, accentColor)
+                          } else {
+                              Toast.makeText(this, "Enable Write Settings in Anime Studio first", Toast.LENGTH_SHORT).show()
+                          }
+                      },
+                      TileSpec("\u25D0", "Dark mode", true) {
+                          hideControlPanel()
+                          openIntent(Intent(Settings.ACTION_DISPLAY_SETTINGS))
+                      },
+                      TileSpec("\uD83D\uDC41", "Eye Comfort", isEyeComfortOn) { btn ->
+                          toggleEyeComfort()
+                          styleCircleTile(btn, isEyeComfortOn, accentColor)
+                      },
+                      TileSpec("\u2702", "Screenshot", false) {
+                          hideControlPanel()
+                          Handler(Looper.getMainLooper()).postDelayed({
+                              if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                                  performGlobalAction(GLOBAL_ACTION_TAKE_SCREENSHOT)
+                              }
+                          }, 350)
+                      },
+                      TileSpec("\uD83D\uDCE1", "Personal\nhotspot", false) {
+                          hideControlPanel()
+                          openIntent(Intent(Settings.ACTION_WIRELESS_SETTINGS))
+                      },
+                      TileSpec("\u25CE", "realme Share", false) {
+                          hideControlPanel()
+                          openIntent(Intent(Settings.ACTION_WIFI_SETTINGS))
+                      }
+                  )
+
+                  for (rowIdx in 0 until 3) {
+                      val row = LinearLayout(this).apply {
+                          orientation = LinearLayout.HORIZONTAL
+                          layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(18) }
+                      }
+                      for (colIdx in 0 until 4) {
+                          val spec = tiles[rowIdx * 4 + colIdx]
+                          val cell = LinearLayout(this).apply {
+                              orientation = LinearLayout.VERTICAL
+                              gravity = Gravity.CENTER_HORIZONTAL
+                              layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
+                          }
+                          val circleBtn = TextView(this).apply {
+                              text = spec.icon
+                              textSize = 20f
+                              gravity = Gravity.CENTER
+                              layoutParams = LinearLayout.LayoutParams(dp(58), dp(58))
+                              styleCircleTile(this, spec.active, accentColor)
+                              setOnClickListener { spec.onTap(this) }
+                          }
+                          val lbl = TextView(this).apply {
+                              text = spec.label
+                              textSize = 11.5f
+                              gravity = Gravity.CENTER
+                              setTextColor(Color.WHITE)
+                              setPadding(0, dp(6), 0, 0)
+                          }
+                          cell.addView(circleBtn)
+                          cell.addView(lbl)
+                          row.addView(cell)
+                      }
+                      mainColumn.addView(row)
+                  }
+
+                  val closeHint = TextView(this).apply {
+                      text = "Tap here or swipe up to close"
+                      textSize = 12f
+                      gravity = Gravity.CENTER
+                      setTextColor(Color.parseColor("#CBD5E1"))
+                      setPadding(0, dp(18), 0, dp(10))
+                      setOnClickListener { hideControlPanel() }
+                  }
+                  mainColumn.addView(closeHint)
+
+                  root.addView(mainColumn, FrameLayout.LayoutParams(-1, -1))
+
+                  val params = WindowManager.LayoutParams(
+                      WindowManager.LayoutParams.MATCH_PARENT,
+                      WindowManager.LayoutParams.MATCH_PARENT,
+                      WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                      WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                      PixelFormat.TRANSLUCENT
+                  )
+
+                  panelView = root
+                  try {
+                      wm.addView(panelView, params)
+                  } catch (_: Exception) {}
+              }
+
+              fun hideControlPanel() {
+                  panelView?.let {
+                      try { wm.removeView(it) } catch (_: Exception) {}
+                      panelView = null
+                  }
+              }
+
+              private fun createBigPill(title: String, accentColor: Int, onClick: () -> Unit): View {
+                  return TextView(this).apply {
+                      text = "$title    \u203A"
+                      textSize = 15f
+                      setTypeface(null, Typeface.BOLD)
+                      setTextColor(Color.WHITE)
+                      gravity = Gravity.CENTER_VERTICAL
+                      setPadding(dp(18), 0, dp(14), 0)
+                      background = GradientDrawable().apply {
+                          setColor(accentColor)
+                          cornerRadius = dp(22).toFloat()
+                      }
+                      setOnClickListener { onClick() }
+                  }
+              }
+
+              private fun createVerticalSlider(icon: String, initialPct: Int, accentColor: Int, onChange: (Int) -> Unit): View {
+                  val box = FrameLayout(this).apply {
+                      background = GradientDrawable().apply {
+                          setColor(Color.parseColor("#38FFFFFF"))
+                          cornerRadius = dp(22).toFloat()
+                      }
+                      clipToOutline = true
+                  }
+                  val fill = View(this).apply {
+                      background = GradientDrawable().apply {
+                          setColor(accentColor)
+                          cornerRadius = dp(22).toFloat()
+                      }
+                  }
+                  val fillLp = FrameLayout.LayoutParams(-1, 0, Gravity.BOTTOM)
+                  box.addView(fill, fillLp)
+
+                  val iconView = TextView(this).apply {
+                      text = "$icon\n$initialPct%"
+                      textSize = 13f
+                      gravity = Gravity.CENTER
+                      setTextColor(Color.WHITE)
+                      setPadding(0, 0, 0, dp(14))
+                  }
+                  box.addView(iconView, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
+
+                  box.post {
+                      fillLp.height = (box.height * initialPct.coerceIn(0, 100)) / 100
+                      fill.layoutParams = fillLp
+                  }
+
+                  box.setOnTouchListener { v, ev ->
+                      when (ev.action) {
+                          MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
+                              v.parent?.requestDisallowInterceptTouchEvent(true)
+                              val h = v.height.coerceAtLeast(1)
+                              val pct = ((1f - (ev.y / h)) * 100f).toInt().coerceIn(0, 100)
+                              fillLp.height = (h * pct) / 100
+                              fill.layoutParams = fillLp
+                              iconView.text = "$icon\n$pct%"
+                              onChange(pct)
+                              true
+                          }
+                          else -> false
+                      }
+                  }
+                  return box
+              }
+
+              private fun styleCircleTile(btn: TextView, active: Boolean, accentColor: Int) {
+                  btn.background = GradientDrawable().apply {
+                      shape = GradientDrawable.OVAL
+                      setColor(if (active) accentColor else Color.parseColor("#38FFFFFF"))
+                  }
+                  btn.setTextColor(Color.WHITE)
+              }
+
+              private fun toggleFlashlight() {
+                  try {
+                      val cm = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+                      val id = cm.cameraIdList.firstOrNull() ?: return
+                      isTorchOn = !isTorchOn
+                      cm.setTorchMode(id, isTorchOn)
+                  } catch (_: Exception) {}
+              }
+
+              private fun toggleEyeComfort() {
+                  isEyeComfortOn = !isEyeComfortOn
+                  if (isEyeComfortOn) {
+                      if (eyeComfortView == null) {
+                          eyeComfortView = View(this).apply {
+                              setBackgroundColor(Color.argb(45, 255, 140, 0))
+                          }
+                          val lp = WindowManager.LayoutParams(
+                              -1, -1,
+                              WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                              WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                                      WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                                      WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                              PixelFormat.TRANSLUCENT
+                          )
+                          try { wm.addView(eyeComfortView, lp) } catch (_: Exception) {}
+                      }
+                  } else {
+                      eyeComfortView?.let {
+                          try { wm.removeView(it) } catch (_: Exception) {}
+                          eyeComfortView = null
+                      }
+                  }
+              }
+
+              private fun openIntent(intent: Intent) {
+                  intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                  try { startActivity(intent) } catch (_: Exception) {}
+              }
+
+              private fun addSpacer(parent: LinearLayout, hDp: Int) {
+                  parent.addView(View(this), LinearLayout.LayoutParams(1, dp(hDp)))
+              }
+
+              private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+
+              override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+              override fun onInterrupt() {}
+          }
+          EOF
+
+          gradle assembleDebug
+
+      - name: Upload Compiled APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: AnimeControlCenter-APK
+          path: build_workspace/app/build/outputs/apk/debug/app-debug.apk
